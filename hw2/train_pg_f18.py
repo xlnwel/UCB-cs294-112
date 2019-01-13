@@ -82,7 +82,7 @@ class Agent(object):
         self.normalize_advantages = estimate_return_args['normalize_advantages']
 
     def init_tf_sess(self):
-        tf_config = tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1, ) 
+        tf_config = tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1) 
         tf_config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=tf_config)
         self.sess.__enter__() # equivalent to `with self.sess:`
@@ -216,13 +216,14 @@ class Agent(object):
         if self.discrete:
             sy_logits_na = policy_parameters
             # YOUR CODE HERE
-            sy_logprob_n = -tf.nn.sparse_softmax_cross_entropy_with_logits(logits=sy_logits_na, labels=sy_ac_na)
+            sy_logprob_n = -tf.nn.sparse_softmax_cross_entropy_with_logits(labels=sy_ac_na, logits=sy_logits_na)
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR CODE HERE
-            sy_logprob_n = tf.reduce_sum(-0.5 * (tf.log(2 * np.pi) + sy_logstd)
-                                         - tf.square(sy_ac_na - sy_mean) / (2 * tf.exp(2 * sy_logstd)),
-                                         axis=1)
+            # sy_logprob_n = tf.reduce_sum(-0.5 * (tf.log(2 * np.pi) + 2 * sy_logstd)
+            #                              - tf.square(sy_ac_na - sy_mean) / (2 * tf.exp(2 * sy_logstd)),
+            #                              axis=1)
+            sy_logprob_n = -0.5 * tf.reduce_sum(tf.square((sy_ac_na - sy_mean) / tf.exp(sy_logstd)), axis=1)
         return sy_logprob_n
 
     def build_computation_graph(self):
@@ -263,8 +264,8 @@ class Agent(object):
         #                           ----------PROBLEM 2----------
         # Loss Function and Training Operation
         #========================================================================================#
-        loss = -tf.reduce_mean(self.sy_logprob_n * self.sy_adv_n) # YOUR CODE HERE
-        self.update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(loss)
+        self.loss = -tf.reduce_mean(self.sy_logprob_n * self.sy_adv_n) # YOUR CODE HERE
+        self.update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
 
         #========================================================================================#
         #                           ----------PROBLEM 6----------
@@ -282,9 +283,8 @@ class Agent(object):
                                     size=self.size))
             # YOUR CODE HERE
             self.sy_target_n = tf.placeholder(tf.float32, shape=[None], name='target')
-            # baseline_loss = tf.losses.mean_squared_error(self.sy_target_n, self.baseline_prediction)
-            baseline_loss = tf.nn.l2_loss(self.sy_target_n - self.baseline_prediction)
-            self.baseline_update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(baseline_loss)
+            self.baseline_loss = tf.losses.mean_squared_error(self.sy_target_n, self.baseline_prediction)
+            self.baseline_update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(self.baseline_loss)
 
     def sample_trajectories(self, itr, env):
         # Collect paths until we have enough timesteps
@@ -395,12 +395,6 @@ class Agent(object):
         """
         # YOUR CODE HERE
         if self.reward_to_go:
-            # q_m = []
-            # for re in re_n:
-            #     q = re[-1]
-            #     for r in reversed(re[:-1]):
-            #         q.insert(0, r + self.gamma * q_m[0])
-            # q_m.append(q)
             q_m = [[np.sum([self.gamma**j * r for j, r in enumerate(re[i:])]) 
                     for i in range(len(re))] for re in re_n]
         else:
@@ -509,8 +503,10 @@ class Agent(object):
 
             # YOUR CODE HERE
             target_n = self.norm(q_n)
-            self.sess.run(self.baseline_update_op, feed_dict={self.sy_ob_no: ob_no, 
-                                                              self.sy_target_n: target_n})
+            baseline_loss, _ = self.sess.run([self.baseline_loss, self.baseline_update_op], 
+                                             feed_dict={self.sy_ob_no: ob_no, 
+                                                        self.sy_target_n: target_n})
+            print('baseline loss: {}'.format(baseline_loss))
 
         #====================================================================================#
         #                           ----------PROBLEM 3----------
@@ -524,9 +520,11 @@ class Agent(object):
         # and after an update, and then log them below. 
 
         # YOUR CODE HERE
-        self.sess.run(self.update_op, feed_dict={self.sy_ob_no: ob_no,
-                                                 self.sy_ac_na: ac_na,
-                                                 self.sy_adv_n: adv_n})
+        loss, _ = self.sess.run([self.loss, self.update_op], 
+                                feed_dict={self.sy_ob_no: ob_no,
+                                           self.sy_ac_na: ac_na,
+                                           self.sy_adv_n: adv_n})
+        print('loss: {}'.format(loss))
 
     def norm(self, value, mean=0., std=1.):
         normalized_value = (value - np.mean(value)) / np.std(value)
