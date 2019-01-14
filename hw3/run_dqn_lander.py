@@ -61,7 +61,7 @@ def lander_learn(env,
                  session,
                  num_timesteps,
                  seed):
-
+    
     optimizer = lander_optimizer()
     stopping_criterion = lander_stopping_criterion(num_timesteps)
     exploration_schedule = lander_exploration_schedule(num_timesteps)
@@ -87,6 +87,7 @@ def get_session():
         inter_op_parallelism_threads=1,
         intra_op_parallelism_threads=1,
         device_count={'GPU': 0})
+    tf_config.gpu_options.allow_growth = True
     # GPUs don't significantly speed up deep Q-learning for lunar lander,
     # since the observations are low-dimensional
     session = tf.Session(config=tf_config)
