@@ -1,7 +1,8 @@
 import argparse
 import gym
 from gym import wrappers
-import os.path as osp
+import os
+import time
 import random
 import numpy as np
 import tensorflow as tf
@@ -10,7 +11,6 @@ import tensorflow.contrib.layers as layers
 import dqn
 from dqn_utils import *
 from atari_wrappers import *
-
 
 def atari_model(img_in, num_actions, scope, reuse=False):
     # as described in https://storage.googleapis.com/deepmind-data/assets/papers/DeepMindNature14236Paper.pdf
@@ -30,6 +30,7 @@ def atari_model(img_in, num_actions, scope, reuse=False):
 
 def atari_learn(env,
                 session,
+                logdir,
                 num_timesteps):
     # This is just a rough estimate
     num_iterations = float(num_timesteps) / 4.0
@@ -75,7 +76,8 @@ def atari_learn(env,
         frame_history_len=4,
         target_update_freq=10000,
         grad_norm_clipping=10,
-        double_q=True
+        double_q=True,
+        logdir=logdir
     )
     env.close()
 
@@ -111,12 +113,21 @@ def get_env(task, seed):
     env.seed(seed)
 
     expt_dir = '/tmp/hw3_vid_dir2/'
-    env = wrappers.Monitor(env, osp.join(expt_dir, "gym"), force=True)
+    env = wrappers.Monitor(env, os.path.join(expt_dir, "gym"), force=True)
     env = wrap_deepmind(env)
 
     return env
 
 def main():
+    data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
+
+    if not (os.path.exists(data_path)):
+        os.makedirs(data_path)
+    logdir = 'dqn' + time.strftime("%d-%m-%Y_%H-%M-%S")
+    logdir = os.path.join(data_path, logdir)
+    if not(os.path.exists(logdir)):
+        os.makedirs(logdir)
+
     # Get Atari games.
     task = gym.make('PongNoFrameskip-v4')
 
@@ -125,7 +136,7 @@ def main():
     print('random seed = %d' % seed)
     env = get_env(task, seed)
     session = get_session()
-    atari_learn(env, session, num_timesteps=2e8)
+    atari_learn(env, session, logdir, num_timesteps=2e8)
 
 if __name__ == "__main__":
     main()
