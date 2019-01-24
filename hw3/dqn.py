@@ -10,8 +10,13 @@ import tensorflow                as tf
 import tensorflow.contrib.layers as layers
 from collections import namedtuple
 from dqn_utils import *
+import logz
 
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
+
+def setup_logger(logdir, locals_):
+    # Configure output directory for logging
+    logz.configure_output_dir(logdir)
 
 class QLearner(object):
 
@@ -33,7 +38,8 @@ class QLearner(object):
     grad_norm_clipping=10,
     rew_file=None,
     double_q=True,
-    lander=False):
+    lander=False,
+    logdir=None):
     """Run Deep Q-learning algorithm.
 
     You can specify your own convnet using q_func.
@@ -89,7 +95,9 @@ class QLearner(object):
     """
     assert type(env.observation_space) == gym.spaces.Box
     assert type(env.action_space)      == gym.spaces.Discrete
-
+    
+    setup_logger(logdir, locals())
+    
     self.target_update_freq = target_update_freq
     self.optimizer_spec = optimizer_spec
     self.batch_size = batch_size
@@ -100,7 +108,7 @@ class QLearner(object):
     self.session = session
     self.exploration = exploration
     self.rew_file = str(uuid.uuid4()) + '.pkl' if rew_file is None else rew_file
-
+    self.session.__enter__()
     ###############
     # BUILD MODEL #
     ###############
@@ -159,7 +167,23 @@ class QLearner(object):
     ######
 
     # YOUR CODE HERE
+    q_dist = q_func(obs_t_float, self.num_actions, 'main_net')
+    self.best_action = tf.argmax(q_dist, axis=1)[0]
+    q = tf.reduce_sum(tf.one_hot(self.act_t_ph, self.num_actions) * q_dist, axis=1)
+    q_next_dist = q_func(obs_tp1_float, self.num_actions, 'target_net')
 
+    if double_q:
+        next_action = tf.argmax(q_func(obs_tp1_float, self.num_actions, 'main_net', reuse=True), axis=1)
+        q_next = tf.stop_gradient(tf.reduce_sum(tf.one_hot(next_action, self.num_actions) * q_next_dist, axis=1))
+    else:
+        q_next = tf.stop_gradient(tf.reduce_max(q_next_dist, axis=1))
+        
+    q_target = self.rew_t_ph + (1 - self.done_mask_ph) * gamma * q_next
+
+    self.total_error = huber_loss(q - q_target)
+
+    q_func_vars = tf.global_variables('main_net')
+    target_q_func_vars = tf.global_variables('target_net')
     ######
 
     # construct optimization op (with gradient clipping)
@@ -229,6 +253,17 @@ class QLearner(object):
     #####
 
     # YOUR CODE HERE
+    idx = self.replay_buffer.store_frame(self.last_obs)
+    obs = self.replay_buffer.encode_recent_observation()
+    if not self.model_initialized or random.random() < self.exploration.value(self.t):
+        action = self.env.action_space.sample()
+    else:
+        action = self.session.run(self.best_action, feed_dict={self.obs_t_ph: [obs]})
+    obs, reward, done, _ = self.env.step(action)
+    
+    self.replay_buffer.store_effect(idx, action, reward, done)
+
+    self.last_obs = self.env.reset() if done else obs
 
   def update_model(self):
     ### 3. Perform experience replay and train the network.
@@ -274,8 +309,34 @@ class QLearner(object):
       #####
 
       # YOUR CODE HERE
+        # 3.a
+        obs, actions, rewards, next_obs, dones = self.replay_buffer.sample(self.batch_size)
 
-      self.num_param_updates += 1
+        # 3.b
+        if not self.model_initialized:
+            # initialize_interdependent_variables(self.session, tf.global_variables(), {
+            #     self.obs_t_ph: obs,
+            #     self.obs_tp1_ph: next_obs,
+            # })
+            self.session.run(tf.global_variables_initializer())
+            self.model_initialized = True
+            print('Model initialized')
+
+        # 3.c
+        self.session.run(self.train_fn, feed_dict={
+            self.obs_t_ph: obs,
+            self.act_t_ph: actions,
+            self.rew_t_ph: rewards,
+            self.obs_tp1_ph: next_obs,
+            self.done_mask_ph: dones,
+            self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+        })
+
+        # 3.d
+        if self.num_param_updates % self.target_update_freq == 0:
+            self.session.run(self.update_target_fn)
+
+        self.num_param_updates += 1
 
     self.t += 1
 
@@ -283,35 +344,29 @@ class QLearner(object):
     episode_rewards = get_wrapper_by_name(self.env, "Monitor").get_episode_rewards()
 
     if len(episode_rewards) > 0:
-      self.mean_episode_reward = np.mean(episode_rewards[-100:])
+        self.mean_episode_reward = np.mean(episode_rewards[-100:])
 
     if len(episode_rewards) > 100:
-      self.best_mean_episode_reward = max(self.best_mean_episode_reward, self.mean_episode_reward)
+        self.best_mean_episode_reward = max(self.best_mean_episode_reward, self.mean_episode_reward)
 
     if self.t % self.log_every_n_steps == 0 and self.model_initialized:
-      print("Timestep %d" % (self.t,))
-      print("mean reward (100 episodes) %f" % self.mean_episode_reward)
-      print("best mean reward %f" % self.best_mean_episode_reward)
-      print("episodes %d" % len(episode_rewards))
-      print("exploration %f" % self.exploration.value(self.t))
-      print("learning_rate %f" % self.optimizer_spec.lr_schedule.value(self.t))
-      if self.start_time is not None:
-        print("running time %f" % ((time.time() - self.start_time) / 60.))
-
-      self.start_time = time.time()
-
-      sys.stdout.flush()
-
-      with open(self.rew_file, 'wb') as f:
-        pickle.dump(episode_rewards, f, pickle.HIGHEST_PROTOCOL)
+        logz.log_tabular("Time", (time.time() - self.start_time) / 60.)
+        logz.log_tabular("Timestep", self.t)
+        logz.log_tabular("Episodes", len(episode_rewards))
+        logz.log_tabular("AverageReturn", self.mean_episode_reward)
+        logz.log_tabular("MaxReturn", self.best_mean_episode_reward)
+        logz.log_tabular("Exploration", self.exploration.value(self.t))
+        logz.dump_tabular()
+        logz.pickle_tf_vars()
 
 def learn(*args, **kwargs):
-  alg = QLearner(*args, **kwargs)
-  while not alg.stopping_criterion_met():
-    alg.step_env()
-    # at this point, the environment should have been advanced one step (and
-    # reset if done was true), and self.last_obs should point to the new latest
-    # observation
-    alg.update_model()
-    alg.log_progress()
+    alg = QLearner(*args, **kwargs)
+    while not alg.stopping_criterion_met():
+        alg.start_time = time.time()
+        alg.step_env()
+        # at this point, the environment should have been advanced one step (and
+        # reset if done was true), and self.last_obs should point to the new latest
+        # observation
+        alg.update_model()
+        alg.log_progress()
 

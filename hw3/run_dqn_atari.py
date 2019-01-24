@@ -7,6 +7,7 @@ import random
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.layers as layers
+from multiprocessing import Process
 
 import dqn
 from dqn_utils import *
@@ -30,7 +31,9 @@ def atari_model(img_in, num_actions, scope, reuse=False):
 
 def atari_learn(env,
                 session,
+                double,
                 logdir,
+                seed,
                 num_timesteps):
     # This is just a rough estimate
     num_iterations = float(num_timesteps) / 4.0
@@ -76,8 +79,8 @@ def atari_learn(env,
         frame_history_len=4,
         target_update_freq=10000,
         grad_norm_clipping=10,
-        double_q=True,
-        logdir=logdir
+        double_q=double,
+        logdir=os.path.join(logdir,'%d'%seed)
     )
     env.close()
 
@@ -119,24 +122,42 @@ def get_env(task, seed):
     return env
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--env_name', type=str, default='PongNoFrameskip-v4')
+    args = parser.parse_args()
+
     data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data')
 
     if not (os.path.exists(data_path)):
         os.makedirs(data_path)
-    logdir = 'dqn' + time.strftime("%d-%m-%Y_%H-%M-%S")
-    logdir = os.path.join(data_path, logdir)
-    if not(os.path.exists(logdir)):
-        os.makedirs(logdir)
+    
+    processes = []
 
-    # Get Atari games.
-    task = gym.make('PongNoFrameskip-v4')
+    for double in [True, False]:
+        def train_func():
+            alg_name = 'ddqn' if double else 'dqn'
+            logdir = args.env_name + '_' + alg_name + '_' + time.strftime("%d-%m-%Y_%H-%M-%S")
+            logdir = os.path.join(data_path, logdir)
+            if not(os.path.exists(logdir)):
+                os.makedirs(logdir)
 
-    # Run training
-    seed = random.randint(0, 9999)
-    print('random seed = %d' % seed)
-    env = get_env(task, seed)
-    session = get_session()
-    atari_learn(env, session, logdir, num_timesteps=2e8)
+            # Get Atari games.
+            task = gym.make(args.env_name)
+
+            # Run training
+            seed = random.randint(0, 9999)
+            print('random seed = %d' % seed)
+            env = get_env(task, seed)
+            session = get_session()
+            atari_learn(env, session, double, logdir, seed, num_timesteps=2e8)
+
+        p = Process(target=train_func)
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
 
 if __name__ == "__main__":
     main()
