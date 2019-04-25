@@ -220,9 +220,9 @@ class Agent(object):
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR CODE HERE
-            # sy_logprob_n = tf.reduce_sum(-0.5 * tf.log(2 * np.pi) - sy_logstd
-            #                              - 0.5 * tf.square(sy_ac_na - sy_mean) / tf.exp(2 * sy_logstd),
-            #                              axis=1)
+            # sy_logprob_n = .5 * tf.reduce_sum(np.log(2 * np.pi) + 2 * sy_logstd
+            #                                   + tf.square(sy_ac_na - sy_mean) / tf.exp(2 * sy_logstd),
+            #                                   axis=1)
             sy_logprob_n = -0.5 * tf.reduce_sum(tf.square((sy_ac_na - sy_mean) / tf.exp(sy_logstd)), axis=1)
         return sy_logprob_n
 
